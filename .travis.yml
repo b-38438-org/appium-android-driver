@@ -1,37 +1,35 @@
 language: android
 dist: precise
 addons:
-    apt:
-      sources:
-        - ubuntu-toolchain-r-test
-      packages:
-        - g++-4.9
+  apt:
+    sources:
+      - ubuntu-toolchain-r-test
+    packages:
+      - g++-6
 android:
   components:
-    # use the latest revision of Android SDK Tools
     - platform-tools
     - tools
-
-    # Additional components
-    - extra-google-google_play_services
-    - extra-google-m2repository
-    - extra-android-m2repository
-    - addon-google_apis-google-19
-
-    # Specify at least one system image,
-    # if you need to run emulator(s) during your tests
-    - sys-img-armeabi-v7a-android-22
+    - build-tools
+  licenses:
+    - 'android-sdk-preview-license-.+'
+    - 'android-sdk-license-.+'
+    - 'google-gdk-license-.+'
 env:
   global:
+    - NODE_VERSION=8
     - _FORCE_LOGS=1
     - DEVICE=android
     - MOCHA_TIMEOUT=360000
     - RECURSIVE=
     - START_EMU=1
-    - ANDROID_EMU_NAME=test
-    - ANDROID_EMU_TARGET=android-21
-    - ANDROID_EMU_ABI=armeabi-v7a
-    - CC=gcc-4.9 CXX=g++-4.9
+    - EMU_NAME=test
+    - EMU_TARGET=android-21
+    - EMU_ABI=x86_64
+    - EMU_TAG=default
+    - BUILD_TOOLS=28.0.3
+    - API_TARGET=android-28
+    - CC=gcc-6 CXX=g++-6
   matrix:
     - TEST=unit RECURSIVE=--recursive START_EMU=0 COVERALLS=1
     - TEST=functional
@@ -41,27 +39,46 @@ env:
     - TEST=functional/commands/basic
     - TEST=functional/commands/find
     - TEST=functional/commands/touch
-before_script:
-  # node stuff
-  - curl -o- https://raw.githubusercontent.com/creationix/nvm/v0.33.1/install.sh | bash
-  - nvm install 8
-  - node --version
-  - npm --version
-  - npm install appium-test-support # get the travis emu scripts
-
-  # android stuff
-  - android list sdk --extended --no-ui --all
-  - android list targets
-  - $(npm bin)/android-emu-travis-pre
-
-  # npm stuff
+before_install:
+  - echo $ANDROID_HOME
+  - |
+    if [ ${START_EMU} = "1" ]; then
+      echo 'count=0' > /home/travis/.android/repositories.cfg
+      echo yes | android update sdk --no-ui -t tools
+      echo yes | sdkmanager --update > /dev/null
+      echo yes | sdkmanager "platform-tools" > /dev/null
+      echo yes | sdkmanager > /dev/null
+      echo yes | sdkmanager "build-tools;${BUILD_TOOLS}" > /dev/null
+      echo yes | sdkmanager "build-tools;${API_TARGET}" > /dev/null
+      echo yes | sdkmanager "platforms;${EMU_TARGET}" > /dev/null
+      echo yes | sdkmanager "platforms;${API_TARGET}" > /dev/null
+      echo yes | sdkmanager "extras;android;m2repository" > /dev/null
+      echo yes | sdkmanager "extras;google;m2repository" > /dev/null
+      echo yes | sdkmanager --channel=3 "emulator" > /dev/null
+      export EMU_IMAGE="system-images;${EMU_TARGET};${EMU_TAG};${EMU_ABI}"
+      for retry in 1 2 3; do
+        echo yes | sdkmanager "${EMU_IMAGE}" > /dev/null && break
+        echo "sdkmanager was not able to download the ${EMU_IMAGE} image (retry ${retry})"
+        sleep 5
+      done
+      sdkmanager --list
+      export TOOLS=${ANDROID_HOME}/tools
+      export PATH=${ANDROID_HOME}:${ANDROID_HOME}/emulator:${TOOLS}:${TOOLS}/bin:${ANDROID_HOME}/platform-tools:${PATH}
+      echo no | avdmanager create avd -k "${EMU_IMAGE}" -n "${EMU_NAME}" -f --abi "${EMU_ABI}" --tag "${EMU_TAG}" || exit 1
+      emulator -avd "${EMU_NAME}" -no-accel -no-snapshot -no-window -camera-back none -camera-front none -selinux permissive -qemu -m 2048 &
+    else
+      sdkmanager --list
+    fi
+install:
+  - nvm install $NODE_VERSION
   - npm install
-
-  # make sure emulator started
-  - $(npm bin)/android-emu-travis-post
-  - sleep 30
-  - adb shell input keyevent 82 &
+  - npm install appium-test-support # get the travis emu scripts
+before_script:
+  - |
+    if [ ${START_EMU} = "1" ]; then
+      $(npm bin)/android-emu-travis-post;
+    fi
 script:
-  - npm run lint && npm run mocha -- -t $MOCHA_TIMEOUT $RECURSIVE build/test/$TEST -g @skip-ci -i
+  - npm run lint && npx mocha -t $MOCHA_TIMEOUT $RECURSIVE build/test/$TEST -g @skip-ci -i
 after_success:
   - if [ ${COVERALLS} = "1" ]; then npm run coverage; fi
